@@ -5,6 +5,14 @@
 # specific dev builds, so reusing that venv saves a fight).
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# Load ./.env if present, so a host can set DISTILLERY_* (interpreter, index db,
+# secrets locations) in one place and cron picks it up without a wrapper script.
+if [ -f ./.env ]; then
+  set -a
+  . ./.env
+  set +a
+fi
 # Interpreter search order: an explicit DISTILLERY_PYTHON, a local .venv, then a
 # sibling essentia-explorer venv (which already has the arm64 essentia wheel).
 for candidate in "${DISTILLERY_PYTHON:-}" "./.venv/bin/python" \
