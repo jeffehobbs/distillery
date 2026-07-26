@@ -3,6 +3,30 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_dotenv(path=None):
+    """Fold ROOT/.env into the environment, without overriding what's already set.
+
+    Done here rather than only in run.sh so that configuration holds however the
+    package is entered — a cron line, a direct `python -m distillery`, or an import
+    from another script all see the same settings.
+    """
+    path = Path(path or ROOT / ".env")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
+
 DATA_DIR = Path(os.environ.get("DISTILLERY_DATA", ROOT / "data"))
 
 ALBUMS_DIR = DATA_DIR / "albums"      # downloaded source tracks, per album slug
