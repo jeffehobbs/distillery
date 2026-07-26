@@ -59,8 +59,13 @@ python3.12 -m venv .venv
 ```
 
 `run.sh` looks for an interpreter in this order: `$DISTILLERY_PYTHON`, `./.venv`, then
-a sibling `essentia-explorer` venv. The first Demucs run downloads its model (~80 MB)
-from HuggingFace and caches it.
+a sibling `essentia-explorer` venv.
+
+The first Demucs run downloads the `htdemucs` model (~80 MB) from HuggingFace and
+caches it under `~/.cache/huggingface`. **No HuggingFace account or token is
+required** — `adefossez/HTDemucs` is public and ungated. You will see a warning
+suggesting you set `HF_TOKEN` for higher rate limits and faster downloads; it is
+advisory, and the download works fine without one.
 
 ## Quickstart
 
