@@ -47,11 +47,18 @@ def mountpoint():
     return None
 
 
-def ensure_mounted(verbose=True):
-    """Find the share, mounting it with mount_smbfs if it isn't already up."""
+def ensure_mounted(verbose=True, required=True):
+    """Find the share, mounting it with mount_smbfs if it isn't already up.
+
+    Returns None rather than raising when `required` is False — the caller can then
+    fall back to reading over SMB directly (see smbfetch), which is the only option
+    on a host where mounting needs root.
+    """
     mp = mountpoint()
     if mp:
         return mp
+    if not required and not Path("/sbin/mount_smbfs").exists():
+        return None            # no mounter here; the caller will stream instead
 
     s = config.secrets()
     host = s.get("SMB_HOST", config.SMB_HOST)
@@ -194,8 +201,20 @@ def album_from_walk(mp, artist, album, verbose=True):
 # ---------------------------------------------------------------- fetch
 
 def fetch_album(query, limit=None, force=False, verbose=True):
-    """Copy an album out of the local collection into data/albums/<slug>/."""
-    mp = ensure_mounted(verbose=verbose)
+    """Copy an album out of the collection into data/albums/<slug>/.
+
+    Uses a mounted share when there is one, and otherwise streams the files over SMB
+    with smbprotocol, which needs no mount and no root.
+    """
+    from . import smbfetch
+    mp = ensure_mounted(verbose=verbose, required=False)
+    if mp is None:
+        if not smbfetch.available():
+            raise RuntimeError(
+                "share is not mounted and smbprotocol is not installed — either "
+                "mount it, or `pip install smbprotocol` to stream over SMB.")
+        if verbose:
+            print("  share not mounted; streaming over SMB (smbprotocol)")
     artist, album = _split_query(query)
 
     tracks, src = [], None
@@ -227,7 +246,7 @@ def fetch_album(query, limit=None, force=False, verbose=True):
     from . import parallel
     workers = parallel.worker_count("io", n_items=len(tracks))
 
-    def fetch_one(item):
+    def fetch_mounted(item):
         i, t = item
         srcp = resolve_path(t["path"])
         if srcp is None:                      # relative to the share as a last resort
@@ -242,10 +261,32 @@ def fetch_album(query, limit=None, force=False, verbose=True):
                         f"({target.stat().st_size / 1e6:.1f} MB)")
 
     got = []
-    for target, line in parallel.run(fetch_one, list(enumerate(tracks, 1)), workers):
-        print(line)
-        if target is not None:
-            got.append(target)
+    if mp is not None:
+        for target, line in parallel.run(fetch_mounted, list(enumerate(tracks, 1)),
+                                         workers):
+            print(line)
+            if target is not None:
+                got.append(target)
+    else:
+        # One SMB session for the whole album; reads are serial, which is kinder to a
+        # NAS than a dozen parallel streams (and is not the slow stage anyway).
+        with smbfetch.session() as tree:
+            for i, t in enumerate(tracks, 1):
+                rel = t["rel_path"]
+                suffix = Path(rel).suffix.lower()
+                target = dest / f"{i:02d}_{_sanitize_filename(t['title'])}{suffix}"
+                if target.exists() and not force and target.stat().st_size > 0:
+                    print(f"  [{i:02d}] cached: {target.name}")
+                    got.append(target)
+                    continue
+                try:
+                    smbfetch.fetch(tree, rel, target)
+                except Exception as e:        # noqa: BLE001 - keep the album moving
+                    print(f"  [{i:02d}] !! {rel}: {type(e).__name__}: {e}")
+                    continue
+                print(f"  [{i:02d}] {target.name}  "
+                      f"({target.stat().st_size / 1e6:.1f} MB)")
+                got.append(target)
 
     meta = {"artist": artist, "album": album, "slug": slug,
             "source": f"smb://{config.SMB_HOST}/{config.SMB_SHARE}",

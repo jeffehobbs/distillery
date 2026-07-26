@@ -121,6 +121,31 @@ DEMUCS_MODEL = "htdemucs"
 # free compute; it feeds the texture layer.
 WANT_STEMS = ("drums", "other")
 
+# --- video + posting (see video.py, poster.py). Both optional.
+VIDEO_DIR = DATA_DIR / "videos"
+VIDEO_FONT = Path(os.environ.get("DISTILLERY_VIDEO_FONT", ROOT / "data" / "kabel.ttf"))
+VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS = 1280, 720, 25
+VIDEO_CRF = 23
+# Target file size. The visuals are noisy (a moving waveform plus a glow), so
+# quality-based encoding produced ~3.6 Mbps — 68 MB for 2:31, and a 6:40 piece would
+# have been ~135 MB, past what Mastodon accepts. Encoding to a size budget instead
+# means the file fits whatever the length; masto.py still asks the instance for its
+# real cap before uploading.
+VIDEO_MAX_MB = float(os.environ.get("DISTILLERY_VIDEO_MAX_MB", 45.0))
+POST_ENABLED = os.environ.get("DISTILLERY_POST", "1") not in ("0", "no", "false")
+# Bluesky rejects videos of 3 minutes or longer, and distillery's auto length runs to
+# 6:40 — so posting there is conditional on duration, with a margin under the limit.
+BLUESKY_MAX_VIDEO_S = float(os.environ.get("DISTILLERY_BSKY_MAX_S", 175.0))
+
+# --- nightly picker
+STATE_DB = DATA_DIR / "state.db"
+NIGHTLY_MIN_TRACKS = 3          # fewer than this makes a thin, repetitive pool
+NIGHTLY_COOLDOWN_DAYS = 90      # don't revisit an album for this long
+EXCLUDED_GENRES = tuple(g.strip().lower() for g in os.environ.get(
+    "DISTILLERY_EXCLUDED_GENRES",
+    "podcast,books & spoken,comedy,spoken word,audiobook").split(",") if g.strip())
+EXCLUDED_FILE = ROOT / "excluded.txt"   # one artist/album substring per line
+
 USER_AGENT = "distillery/0.1 ( +https://github.com/jeffehobbs/distillery )"
 
 # Harmony. Chords are OFF: the bed holds a single tonal drone (root + octave) on
@@ -235,17 +260,49 @@ ESSENTIA_DB = Path(os.environ.get(
     Path.home() / "Scripts/essentia-explorer/data/essentia.db"))
 
 
-def secrets():
-    """Read KEY=VALUE lines from secrets.txt; environment wins over the file."""
+# Extra places to look for credentials, so an existing setup can be reused rather
+# than duplicated. Checked after secrets.txt, never overriding it.
+EXTRA_SECRETS_FILES = tuple(
+    Path(p) for p in os.environ.get("DISTILLERY_EXTRA_SECRETS", "").split(":") if p)
+# A two-line username=/password= file, the shape mount.cifs and smbclient use.
+SMB_CREDENTIALS_FILE = Path(os.environ.get(
+    "DISTILLERY_SMB_CREDENTIALS", Path.home() / ".smb_credentials"))
+
+
+def _read_kv(path):
     out = {}
-    if SECRETS_FILE.exists():
-        for line in SECRETS_FILE.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            out[k.strip()] = v.strip()
-    for k in ("SMB_HOST", "SMB_SHARE", "SMB_USER", "SMB_PASSWORD"):
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+def secrets():
+    """All KEY=VALUE credentials, from secrets.txt then any extra files then env.
+
+    Holds SMB credentials for --library and the Bluesky/Mastodon tokens for
+    posting. Environment variables win, so a cron entry can override a file.
+    """
+    out = {}
+    for extra in EXTRA_SECRETS_FILES:
+        out.update(_read_kv(extra))
+    out.update(_read_kv(SECRETS_FILE))
+    # a username=/password= credentials file maps onto SMB_USER/SMB_PASSWORD
+    if SMB_CREDENTIALS_FILE.exists():
+        kv = _read_kv(SMB_CREDENTIALS_FILE)
+        out.setdefault("SMB_USER", kv.get("username", ""))
+        out.setdefault("SMB_PASSWORD", kv.get("password", ""))
+        out = {k: v for k, v in out.items() if v}
+    for k in ("SMB_HOST", "SMB_SHARE", "SMB_USER", "SMB_PASSWORD",
+              "BLUESKY_HANDLE", "BLUESKY_PASSWORD",
+              "MASTODON_INSTANCE_URL", "MASTODON_ACCESS_TOKEN"):
         if os.environ.get(k):
             out[k] = os.environ[k]
     return out

@@ -106,7 +106,27 @@ def _resolve_pool(slug, bpm_arg):
     return pool
 
 
+def default_remix_args(**over):
+    """A full remix Namespace with defaults, for callers that aren't argparse."""
+    base = dict(library=None, album=None, url=None, local=None, slug=None,
+                artist=None, album_name=None, limit=None, bars=None, length=None,
+                minutes=None, exposure=None, bpm="auto", seed=None,
+                bar_sizes=list(config.LOOP_BAR_SIZES),
+                per_size=config.LOOPS_PER_SIZE, mp3=False, chords=False,
+                drone_db=None, texture_db=None, loops_db=None, workers=None,
+                no_texture=False, keep_source_loops=False, force_download=False,
+                force_analyze=False, force_stems=False, force_loops=False)
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
 def cmd_remix(args):
+    run_remix(args)
+    return 0
+
+
+def run_remix(args):
+    """The whole pipeline. Returns dict(base, wav, plan, meta, info)."""
     config.ensure_dirs()
     _apply_overrides(args)
     t_start = time.time()
@@ -230,6 +250,112 @@ def cmd_remix(args):
           f"in {time.time() - t_start:.0f}s total")
     print("   stage times: " + "  ".join(f"{k} {v:g}s" for k, v in timings.items())
           + f"   (workers: {info.get('workers')})")
+    return {"base": base, "wav": Path(f"{base}.wav"), "plan": plan, "meta": meta,
+            "info": info, "timings": timings}
+
+
+def cmd_nightly(args):
+    """Pick an album, distil it, render a video, post it. Built for cron."""
+    from . import nightly, poster
+    config.ensure_dirs()
+    _apply_overrides(args)
+    t0 = time.time()
+    print(f"== distillery nightly  {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    chosen = nightly.pick(seed=args.pick_seed, min_tracks=args.min_tracks)
+    query = f"{chosen['artist']} - {chosen['album']}"
+    slug = download.slugify(f"{chosen['artist']}-{chosen['album']}")
+    run_id = nightly.record_start(chosen["artist"], chosen["album"], slug)
+
+    try:
+        out = run_remix(default_remix_args(
+            library=query, limit=args.limit, seed=args.seed, mp3=args.mp3,
+            workers=args.workers, minutes=args.minutes, length=args.length))
+    except BaseException as e:              # noqa: BLE001 - record then re-raise
+        nightly.record_finish(run_id, error=f"{type(e).__name__}: {e}")
+        raise
+
+    info, plan, meta = out["info"], out["plan"], out["meta"]
+    nightly.record_finish(run_id, duration_s=info["duration_s"], bpm=info["bpm"],
+                          songs_used=info["songs_used"], seed=info["seed"],
+                          wav=str(out["wav"]))
+
+    print("\n== 7/7 video + post")
+    mp4 = None
+    try:
+        mp4 = poster.make_video(out["wav"], meta, info, plan)
+        nightly.record_finish(run_id, mp4=str(mp4))
+    except Exception as e:                  # noqa: BLE001 - audio is already safe
+        print(f"  !! video failed: {type(e).__name__}: {e}")
+        nightly.record_finish(run_id, error=f"video: {type(e).__name__}: {e}")
+
+    if mp4 and config.POST_ENABLED and not args.no_post:
+        res = poster.post(mp4, meta, info, plan, dry_run=args.dry_run,
+                          force_bluesky=args.force_bluesky)
+        nightly.record_finish(run_id, bluesky=res["bluesky"],
+                              mastodon=res["mastodon"])
+    elif mp4:
+        print("  posting disabled (--no-post or DISTILLERY_POST=0)")
+
+    print(f"\ndone in {time.time() - t0:.0f}s")
+    return 0
+
+
+def cmd_post(args):
+    """Render a video for an existing distillation and post it."""
+    from . import poster
+    config.ensure_dirs()
+    wav = Path(args.wav) if args.wav else None
+    if wav is None:
+        wavs = sorted(config.OUT_DIR.glob("distillery_*.wav"),
+                      key=lambda p: p.stat().st_mtime)
+        if not wavs:
+            raise SystemExit("no renders in data/output — run remix first")
+        wav = wavs[-1]
+    txt, planp = wav.with_suffix(".txt"), Path(str(wav)[:-4] + ".plan.json")
+    if not planp.exists():
+        raise SystemExit(f"no plan beside {wav.name} — can't caption it")
+    plan_json = json.loads(planp.read_text())
+    # rebuild just enough of `info` for the caption from the plan and the report
+    info = {"duration_s": plan_json["total_bars"] * (60.0 / plan_json["bpm"]) * 4,
+            "bpm": plan_json["bpm"], "key": plan_json["key"],
+            "key_scale": plan_json["key_scale"], "chords": plan_json.get("chords"),
+            "songs_used": len({e["track_no"] for e in plan_json["loop_events"]}),
+            "loop_events": len(plan_json["loop_events"]),
+            "unique_loops": len({e["loop_id"] for e in plan_json["loop_events"]}),
+            "seed": plan_json["seed"]}
+    if txt.exists():
+        import re as _re
+        m = _re.search(r'"duration_s": ([0-9.]+)', txt.read_text())
+        if m:
+            info["duration_s"] = float(m.group(1))
+    slug = wav.stem.replace("distillery_", "").rsplit("_", 1)[0]
+    metap = config.ALBUMS_DIR / slug / "album.json"
+    meta = json.loads(metap.read_text()) if metap.exists() else {"slug": slug}
+
+    class _P:            # poster only needs .bass off the plan
+        bass = plan_json.get("bass")
+    print(f"  source: {wav.name}")
+    mp4 = Path(args.mp4) if args.mp4 else poster.make_video(wav, meta, info, _P)
+    poster.post(mp4, meta, info, _P, dry_run=args.dry_run,
+                force_bluesky=args.force_bluesky)
+    return 0
+
+
+def cmd_history(args):
+    from . import nightly
+    rows = nightly.history(limit=args.limit)
+    if not rows:
+        print("no nightly runs recorded yet")
+        return 0
+    print(f"{'when':<17}{'album':<44}{'len':>6}{'bpm':>5}  bluesky / mastodon")
+    for r in rows:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["started_at"]))
+        name = f"{r['artist']} — {r['album']}"[:42]
+        dur = f"{int((r['duration_s'] or 0) // 60)}:{int((r['duration_s'] or 0) % 60):02d}"
+        print(f"{when:<17}{name:<44}{dur:>6}{(r['bpm'] or 0):>5.0f}  "
+              f"{(r['bluesky'] or '-')[:28]} / {(r['mastodon'] or '-')[:28]}"
+              + (f"   ERROR {r['error'][:40]}" if r["error"] else ""))
     return 0
 
 
@@ -437,6 +563,37 @@ def main(argv=None):
 
     l = sub.add_parser("list", help="what's cached")
     l.set_defaults(func=cmd_list)
+
+    n = sub.add_parser("nightly", help="pick an album, distil it, post the video")
+    n.add_argument("--dry-run", action="store_true",
+                   help="render everything, post nothing")
+    n.add_argument("--no-post", action="store_true", help="skip posting entirely")
+    n.add_argument("--force-bluesky", action="store_true",
+                   help="attempt Bluesky even if the video exceeds its duration limit")
+    n.add_argument("--pick-seed", type=int, default=None,
+                   help="seed the album choice (reproducible picks)")
+    n.add_argument("--min-tracks", type=int, default=None)
+    n.add_argument("--limit", type=int, default=None)
+    n.add_argument("--seed", type=int, default=None)
+    n.add_argument("--minutes", type=float, default=None)
+    n.add_argument("--length", default=None)
+    n.add_argument("--mp3", action="store_true")
+    n.add_argument("--workers", type=int, default=None)
+    n.add_argument("--drone-db", type=float, default=None)
+    n.add_argument("--texture-db", type=float, default=None)
+    n.add_argument("--loops-db", type=float, default=None)
+    n.set_defaults(func=cmd_nightly)
+
+    po = sub.add_parser("post", help="render a video for a render and post it")
+    po.add_argument("wav", nargs="?", help="a wav in data/output (default: newest)")
+    po.add_argument("--mp4", help="use this mp4 instead of rendering one")
+    po.add_argument("--dry-run", action="store_true")
+    po.add_argument("--force-bluesky", action="store_true")
+    po.set_defaults(func=cmd_post)
+
+    h = sub.add_parser("history", help="recent nightly runs")
+    h.add_argument("--limit", type=int, default=20)
+    h.set_defaults(func=cmd_history)
 
     t = sub.add_parser("selftest", help="run invariant checks (no album needed)")
     t.set_defaults(func=lambda _a: __import__("distillery.selftest",

@@ -730,6 +730,8 @@ def main():
     test_fx()
     test_delight_placement()
     test_library()
+    test_posting_gates()
+    test_nightly_state()
     test_parallel_sizing()
     test_parallel_determinism()
     print()
@@ -1037,3 +1039,72 @@ def test_bassline():
     check("major-mode pieces draw from the major degree pool",
           tuple(pm.bass["degrees"]) in config.BASS_DEGREES["major"],
           str(pm.bass["degrees"]))
+
+
+def test_posting_gates():
+    """Bluesky's three-minute video limit must be enforced before uploading, not
+    discovered as a rejection, and each platform must fail independently."""
+    print("\nposting gates")
+    import tempfile
+    from . import nightly, poster, social, video
+    info_short = {"duration_s": 150.0, "bpm": 128.0, "key": "Bb",
+                  "key_scale": "minor", "chords": False, "songs_used": 8,
+                  "loop_events": 47, "unique_loops": 40, "seed": 1}
+    info_long = dict(info_short, duration_s=300.0)
+    meta = {"artist": "Some Artist", "album": "Some Album"}
+
+    class _P:
+        bass = {"pattern": "walk"}
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as fh:
+        fh.write(b"\0" * 2048)
+        fake = Path(fh.name)
+    try:
+        r = poster.post(fake, meta, info_long, _P, dry_run=True)
+        check("a 5:00 video is kept off Bluesky before any upload",
+              isinstance(r["bluesky"], str) and r["bluesky"].startswith("skipped"),
+              r["bluesky"])
+        check("…and still goes to Mastodon", r["mastodon"] == "dry-run")
+        r = poster.post(fake, meta, info_short, _P, dry_run=True)
+        check("a 2:30 video is eligible for both", r["bluesky"] == "dry-run" and
+              r["mastodon"] == "dry-run")
+        r = poster.post(fake, meta, info_long, _P, dry_run=True, force_bluesky=True)
+        check("--force-bluesky overrides the duration gate",
+              r["bluesky"] == "dry-run", str(r["bluesky"]))
+    finally:
+        fake.unlink(missing_ok=True)
+
+    text = social.post_text(meta, info_short, None)
+    check("post text fits Bluesky's 300-character limit",
+          len(text) <= social.MAX_POST, f"{len(text)} chars")
+    check("post text names the artist and album",
+          "Some Artist" in text and "Some Album" in text)
+    alt = social.alt_text(meta, info_short, _P)
+    check("alt text is descriptive and bounded",
+          200 < len(alt) <= 1800 and "waveform" in alt, f"{len(alt)} chars")
+    check("ffmpeg filter probe returns a bool",
+          isinstance(video.has_filter("showwaves"), bool))
+
+
+def test_nightly_state():
+    print("\nnightly state + picker")
+    import tempfile
+    from . import nightly
+    original = config.STATE_DB
+    with tempfile.TemporaryDirectory() as td:
+        config.STATE_DB = Path(td) / "state.db"
+        try:
+            rid = nightly.record_start("A", "B", "a-b")
+            check("a run is recorded when it starts", rid > 0)
+            nightly.record_finish(rid, duration_s=180.0, bpm=128.0, songs_used=9,
+                                  seed=3, bluesky="posted", mastodon="posted")
+            h = nightly.history(limit=5)
+            check("history reads back what was recorded",
+                  len(h) == 1 and h[0]["bluesky"] == "posted" and
+                  h[0]["duration_s"] == 180.0, str(h[0]["album"]))
+            check("a just-used album is inside the cooldown window",
+                  ("A", "B") in nightly.recent_albums())
+            check("the cooldown expires", ("A", "B") not in
+                  nightly.recent_albums(days=0))
+        finally:
+            config.STATE_DB = original
