@@ -8,12 +8,50 @@ Album choice reads the same index `--library` uses. Candidates need at least
 NIGHTLY_MIN_TRACKS tracks, must not be in an excluded genre or named in
 excluded.txt, and must not have been used within NIGHTLY_COOLDOWN_DAYS.
 """
+import errno
+import os
 import random
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import config
+
+
+@contextmanager
+def lock():
+    """Refuse to start if another run is going.
+
+    A distillation on a CPU-only box can outlast the gap between two cron firings,
+    and two Demucs runs on the same 4 cores would take longer than either alone.
+    The pid is written so a stale lock is obvious, and cleared if the process is gone.
+    """
+    path = config.DATA_DIR / "nightly.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        try:
+            pid = int(path.read_text().split()[0])
+        except (ValueError, IndexError, OSError):
+            pid = None
+        alive = False
+        if pid:
+            try:
+                os.kill(pid, 0)
+                alive = True
+            except OSError as e:
+                alive = e.errno == errno.EPERM
+        if alive:
+            raise RuntimeError(
+                f"another distillery run is active (pid {pid}, lock {path}) — "
+                f"skipping this one")
+        print(f"  clearing stale lock from pid {pid}")
+        path.unlink(missing_ok=True)
+    path.write_text(f"{os.getpid()} {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    try:
+        yield
+    finally:
+        path.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------- state

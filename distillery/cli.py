@@ -262,6 +262,8 @@ def cmd_nightly(args):
     t0 = time.time()
     print(f"== distillery nightly  {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
+    lock = nightly.lock()
+    lock.__enter__()
     chosen = nightly.pick(seed=args.pick_seed, min_tracks=args.min_tracks)
     query = f"{chosen['artist']} - {chosen['album']}"
     slug = download.slugify(f"{chosen['artist']}-{chosen['album']}")
@@ -273,6 +275,7 @@ def cmd_nightly(args):
             workers=args.workers, minutes=args.minutes, length=args.length))
     except BaseException as e:              # noqa: BLE001 - record then re-raise
         nightly.record_finish(run_id, error=f"{type(e).__name__}: {e}")
+        lock.__exit__(type(e), e, None)
         raise
 
     info, plan, meta = out["info"], out["plan"], out["meta"]
@@ -298,6 +301,7 @@ def cmd_nightly(args):
         print("  posting disabled (--no-post or DISTILLERY_POST=0)")
 
     print(f"\ndone in {time.time() - t0:.0f}s")
+    lock.__exit__(None, None, None)
     return 0
 
 
