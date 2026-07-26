@@ -1,0 +1,6 @@
+data/
+secrets.txt
+.venv/
+__pycache__/
+*.pyc
+.DS_Store

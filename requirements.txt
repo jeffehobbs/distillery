@@ -1,0 +1,14 @@
+# distillery needs an interpreter with these. run.sh defaults to the
+# essentia-explorer venv, which already satisfies all of them.
+#
+# Essentia on Apple silicon: there is no general arm64 macOS wheel on PyPI and no
+# brew formula — only specific dev builds ship arm64 wheels. Pin this one.
+essentia==2.1b6.dev1389
+demucs==4.1.0          # htdemucs; pulls torch (MPS on Apple silicon)
+torch>=2.3
+pedalboard>=0.9        # effects: LadderFilter, Reverb, Delay, Bitcrush, PitchShift…
+numpy>=2.0
+scipy>=1.11
+soundfile>=0.12
+
+# External CLI tools (not pip): ffmpeg, yt-dlp
