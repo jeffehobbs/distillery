@@ -264,7 +264,12 @@ def cmd_nightly(args):
 
     lock = nightly.lock()
     lock.__enter__()
-    chosen = nightly.pick(seed=args.pick_seed, min_tracks=args.min_tracks)
+    if getattr(args, "album", None):
+        artist, album = library._split_query(args.album)
+        chosen = {"artist": artist or "unknown", "album": album, "n": 0}
+        print(f"  album forced: {chosen['artist']} — {chosen['album']}")
+    else:
+        chosen = nightly.pick(seed=args.pick_seed, min_tracks=args.min_tracks)
     query = f"{chosen['artist']} - {chosen['album']}"
     slug = download.slugify(f"{chosen['artist']}-{chosen['album']}")
     run_id = nightly.record_start(chosen["artist"], chosen["album"], slug)
@@ -574,6 +579,8 @@ def main(argv=None):
     n.add_argument("--no-post", action="store_true", help="skip posting entirely")
     n.add_argument("--force-bluesky", action="store_true",
                    help="attempt Bluesky even if the video exceeds its duration limit")
+    n.add_argument("--album", default=None,
+                   help='distil this "Artist - Album" instead of picking one')
     n.add_argument("--pick-seed", type=int, default=None,
                    help="seed the album choice (reproducible picks)")
     n.add_argument("--min-tracks", type=int, default=None)
