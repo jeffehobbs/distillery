@@ -126,7 +126,10 @@ def build(wav_path, title_lines, meta_lines, out_path, crf=None,
         rate_args = ["-crf", str(crf or config.VIDEO_CRF)]
     title_lines = [s for s in title_lines if s]
     meta_lines = [s for s in meta_lines if s]
-    font = font_path("".join(title_lines + meta_lines))
+    # Chosen per block, not for the whole caption: an accented artist name should not
+    # cost the display font on the metadata line, which is plain ASCII.
+    title_font = font_path("".join(title_lines))
+    meta_font = font_path("".join(meta_lines))
 
     # stack both groups up from the bottom-left corner
     title_lh, meta_lh = TITLE_SIZE + LINE_SPACING, META_SIZE + LINE_SPACING
@@ -147,8 +150,8 @@ def build(wav_path, title_lines, meta_lines, out_path, crf=None,
         # the visualiser without the caption rather than failing the whole job.
         if has_filter("drawtext"):
             caption = (
-                f"[b3]{_drawtext(font, tf, TITLE_SIZE, TITLE_COLOR, MARGIN_X, title_y)},"
-                f"{_drawtext(font, mf, META_SIZE, META_COLOR, MARGIN_X, meta_y)}[v]")
+                f"[b3]{_drawtext(title_font, tf, TITLE_SIZE, TITLE_COLOR, MARGIN_X, title_y)},"
+                f"{_drawtext(meta_font, mf, META_SIZE, META_COLOR, MARGIN_X, meta_y)}[v]")
         else:
             print("  note: this ffmpeg has no drawtext filter — rendering without "
                   "the caption (rebuild ffmpeg with libfreetype for captions)")

@@ -11,4 +11,12 @@ numpy>=2.0
 scipy>=1.11
 soundfile>=0.12
 
+# Optional. atproto and Mastodon.py are only needed to post; fonttools lets the video
+# check that the caption font can actually render an album's title, and fall back when
+# it can't (a display font typically carries basic Latin only).
+atproto>=0.0.69
+Mastodon.py>=2.0
+fonttools>=4.0
+smbprotocol>=1.17     # reading albums off an SMB share without mounting it
+
 # External CLI tools (not pip): ffmpeg, yt-dlp
