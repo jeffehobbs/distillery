@@ -439,6 +439,49 @@ parallel stage is a map over independent items whose results are collected in in
 order, so reductions happen on one thread in a fixed order. The self-test asserts that a
 6-worker render is bit-identical to a serial one.
 
+## Running it nightly
+
+`distillery nightly` picks an album from the collection, distils it, renders a video
+and posts it — built to run unattended from cron:
+
+```bash
+./run.sh nightly                      # pick, distil, post
+./run.sh nightly --dry-run            # render everything, post nothing
+./run.sh nightly --album "Artist - Album"   # skip the picker
+./run.sh history                      # what has run, and where it went
+```
+
+Album choice takes anything in the index with at least `NIGHTLY_MIN_TRACKS` tracks,
+excluding albums whose tracks carry an excluded genre (podcasts, comedy, audiobooks),
+anything matching a line in `excluded.txt`, and anything used within
+`NIGHTLY_COOLDOWN_DAYS`. Every run is recorded in a state database with what was
+posted where, so `history` shows the trail and repeats are avoided.
+
+**Posting is conditional per platform, and each is independent** — one failing never
+blocks the other, and neither costs you the audio, which is already on disk:
+
+* **Bluesky rejects videos of three minutes or more.** Since auto lengths run to 6:40,
+  the duration is checked *before* uploading and the post is skipped with a reason
+  rather than failing mid-upload. `--force-bluesky` tries anyway.
+* **Mastodon has a size cap**, which is read from the instance rather than assumed.
+  Video is encoded to a size budget (default 80 MB) so a six-minute piece fits as
+  easily as a two-minute one.
+
+Credentials go in `secrets.txt`: `BLUESKY_HANDLE` and `BLUESKY_PASSWORD` (an app
+password), `MASTODON_INSTANCE_URL` and `MASTODON_ACCESS_TOKEN`. Set
+`DISTILLERY_POST=0` or pass `--no-post` to keep everything local.
+
+**Housekeeping.** A run leaves roughly 120 MB of Demucs stems per track plus a copy of
+the source album, which unattended would fill a disk in about a year. Both are
+re-derivable, so they are pruned once the run succeeds; renders and videos age out
+after `NIGHTLY_KEEP_DAYS`. The retimed loop pool is deliberately kept, because it is
+small and lets `rearrange` build another piece from that album without a second Demucs
+pass. `--no-prune` keeps everything.
+
+A pid lock means a slow run can never overlap the next firing — worth having, since on
+a CPU-only host Demucs is by far the slowest stage (about 12 minutes per track on four
+cores, versus seconds for everything else).
+
 ## Commands
 
 ```bash
