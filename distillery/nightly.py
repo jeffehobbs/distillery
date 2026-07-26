@@ -111,6 +111,53 @@ def history(limit=20):
     return [dict(r) for r in rows]
 
 
+# ---------------------------------------------------------------- housekeeping
+
+def _du(path):
+    total = 0
+    for p in Path(path).rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def prune(slug, keep_days=None, verbose=True):
+    """Drop what a finished run no longer needs. Returns bytes freed.
+
+    Removes this album's Demucs stems and the local copy of the source album — both
+    re-derivable, and by far the bulk of the footprint. Keeps the retimed loop pool,
+    which is small and lets `rearrange` build another piece without a second Demucs
+    pass. Then ages out old renders and videos.
+    """
+    import shutil
+    keep_days = config.NIGHTLY_KEEP_DAYS if keep_days is None else keep_days
+    freed = 0
+    for d in (config.STEMS_DIR / slug, config.ALBUMS_DIR / slug):
+        if d.exists():
+            n = _du(d)
+            shutil.rmtree(d, ignore_errors=True)
+            freed += n
+            if verbose:
+                print(f"  pruned {d.relative_to(config.DATA_DIR)} ({n / 1e6:.0f} MB)")
+    if keep_days:
+        cutoff = time.time() - keep_days * 86400
+        for folder in (config.OUT_DIR, config.VIDEO_DIR):
+            for f in sorted(Path(folder).glob("distillery_*")) if folder.exists() else []:
+                try:
+                    if f.is_file() and f.stat().st_mtime < cutoff:
+                        n = f.stat().st_size
+                        f.unlink()
+                        freed += n
+                        if verbose:
+                            print(f"  aged out {f.name} ({n / 1e6:.0f} MB)")
+                except OSError:
+                    pass
+    return freed
+
+
 # ---------------------------------------------------------------- picking
 
 def _excluded_names():

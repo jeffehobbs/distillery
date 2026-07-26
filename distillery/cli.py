@@ -305,6 +305,11 @@ def cmd_nightly(args):
     elif mp4:
         print("  posting disabled (--no-post or DISTILLERY_POST=0)")
 
+    if config.NIGHTLY_PRUNE and not args.no_prune:
+        freed = nightly.prune(slug)
+        if freed:
+            print(f"  freed {freed / 1e6:.0f} MB")
+
     print(f"\ndone in {time.time() - t0:.0f}s")
     lock.__exit__(None, None, None)
     return 0
@@ -577,6 +582,8 @@ def main(argv=None):
     n.add_argument("--dry-run", action="store_true",
                    help="render everything, post nothing")
     n.add_argument("--no-post", action="store_true", help="skip posting entirely")
+    n.add_argument("--no-prune", action="store_true",
+                   help="keep the stems and source copy after the run")
     n.add_argument("--force-bluesky", action="store_true",
                    help="attempt Bluesky even if the video exceeds its duration limit")
     n.add_argument("--album", default=None,

@@ -164,6 +164,14 @@ POST_ENABLED = os.environ.get("DISTILLERY_POST", "1") not in ("0", "no", "false"
 # 6:40 — so posting there is conditional on duration, with a margin under the limit.
 BLUESKY_MAX_VIDEO_S = float(os.environ.get("DISTILLERY_BSKY_MAX_S", 175.0))
 
+# --- nightly housekeeping. A run leaves ~120 MB of Demucs stems per track plus the
+# copied source album, and nightly that fills a disk in about a year. Both are fully
+# re-derivable, so they go once the run has succeeded. The retimed loop pool stays —
+# it is small, and it is what `rearrange` needs to make another piece from the same
+# album without re-running Demucs.
+NIGHTLY_PRUNE = os.environ.get("DISTILLERY_PRUNE", "1") not in ("0", "no", "false")
+NIGHTLY_KEEP_DAYS = float(os.environ.get("DISTILLERY_KEEP_DAYS", 45))
+
 # --- nightly picker
 STATE_DB = DATA_DIR / "state.db"
 NIGHTLY_MIN_TRACKS = 3          # fewer than this makes a thin, repetitive pool
