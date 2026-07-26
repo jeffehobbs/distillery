@@ -155,7 +155,10 @@ VIDEO_CRF = 23
 # have been ~135 MB, past what Mastodon accepts. Encoding to a size budget instead
 # means the file fits whatever the length; masto.py still asks the instance for its
 # real cap before uploading.
-VIDEO_MAX_MB = float(os.environ.get("DISTILLERY_VIDEO_MAX_MB", 45.0))
+# 90 MB fits mastodon.social's advertised 104 MB cap with margin and is far inside
+# Bluesky's, while giving a six-minute piece a usable bitrate. masto.py still asks the
+# instance for its real limit before uploading, so a stricter server is respected.
+VIDEO_MAX_MB = float(os.environ.get("DISTILLERY_VIDEO_MAX_MB", 90.0))
 POST_ENABLED = os.environ.get("DISTILLERY_POST", "1") not in ("0", "no", "false")
 # Bluesky rejects videos of 3 minutes or longer, and distillery's auto length runs to
 # 6:40 — so posting there is conditional on duration, with a margin under the limit.
