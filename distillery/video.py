@@ -27,17 +27,51 @@ META_COLOR = "0xffe64d"     # hot yellow
 TITLE_COLOR = "white"
 
 
-def font_path():
-    """The caption font, or None to let ffmpeg pick a default."""
+FALLBACK_FONTS = ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                  "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+                  "/System/Library/Fonts/Supplemental/Futura.ttc",
+                  "/System/Library/Fonts/Helvetica.ttc")
+
+
+def _covers(font, text):
+    """Does `font` have a glyph for every character in `text`?
+
+    A display font often carries only basic Latin. ffmpeg draws anything missing as
+    an empty box rather than complaining, so an accented artist name silently comes
+    out mangled — worth checking rather than discovering it in a published video.
+    """
+    try:
+        from fontTools.ttLib import TTFont
+    except ImportError:
+        return True                        # can't check; assume the operator knows
+    wanted = {ord(c) for c in text if c not in "\n\r\t "}
+    try:
+        f = TTFont(str(font), fontNumber=0, lazy=True)
+        have = set()
+        for table in f["cmap"].tables:
+            have.update(table.cmap.keys())
+        f.close()
+    except Exception:                       # noqa: BLE001 - unreadable font
+        return True
+    return not (wanted - have)
+
+
+def font_path(text=""):
+    """The caption font: the configured one if it can render `text`, else a fallback."""
+    candidates = []
     p = Path(config.VIDEO_FONT)
     if p.exists():
-        return p
-    for cand in ("/System/Library/Fonts/Supplemental/Futura.ttc",
-                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                 "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"):
-        if Path(cand).exists():
-            return Path(cand)
-    return None
+        candidates.append(p)
+    candidates += [Path(c) for c in FALLBACK_FONTS if Path(c).exists()]
+    if not candidates:
+        return None
+    for cand in candidates:
+        if not text or _covers(cand, text):
+            if cand != candidates[0]:
+                print(f"  note: {candidates[0].name} lacks glyphs for this caption — "
+                      f"using {cand.name}")
+            return cand
+    return candidates[0]
 
 
 def has_filter(name):
@@ -90,9 +124,9 @@ def build(wav_path, title_lines, meta_lines, out_path, crf=None,
                      "-bufsize", f"{int(v_kbps * 2)}k"]
     else:
         rate_args = ["-crf", str(crf or config.VIDEO_CRF)]
-    font = font_path()
     title_lines = [s for s in title_lines if s]
     meta_lines = [s for s in meta_lines if s]
+    font = font_path("".join(title_lines + meta_lines))
 
     # stack both groups up from the bottom-left corner
     title_lh, meta_lh = TITLE_SIZE + LINE_SPACING, META_SIZE + LINE_SPACING

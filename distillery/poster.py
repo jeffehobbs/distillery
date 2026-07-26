@@ -27,10 +27,10 @@ def make_video(wav_path, meta, info, plan, out_dir=None, crf=None):
     mins = int(info["duration_s"] // 60)
     secs = int(round(info["duration_s"] % 60))
     title_lines = [artist, album]
-    meta_lines = [f"{info['bpm']:g} BPM  ·  {key}",
-                  f"{mins}:{secs:02d}  ·  {info['songs_used']} songs  ·  "
-                  f"{info['loop_events']} loops",
-                  "distilled"]
+    # One line, space-separated: no bullet character, because a display font like
+    # Kabel has no glyph for it and ffmpeg renders the missing glyph as a box.
+    meta_lines = [f"{info['bpm']:g} BPM   {key}   {mins}:{secs:02d}   "
+                  f"{info['songs_used']} songs   {info['loop_events']} loops"]
     mp4 = out_dir / (wav_path.stem + ".mp4")
     return video.build(wav_path, title_lines, meta_lines, mp4, crf=crf)
 
