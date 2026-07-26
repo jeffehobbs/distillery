@@ -345,7 +345,16 @@ def cmd_post(args):
             info["duration_s"] = float(m.group(1))
     slug = wav.stem.replace("distillery_", "").rsplit("_", 1)[0]
     metap = config.ALBUMS_DIR / slug / "album.json"
-    meta = json.loads(metap.read_text()) if metap.exists() else {"slug": slug}
+    if metap.exists():
+        meta = json.loads(metap.read_text())
+    else:
+        from . import nightly as _n
+        artist, album = _n.album_for_slug(slug)
+        meta = {"slug": slug, "artist": artist, "album": album}
+        if not artist:
+            print(f"  !! no album.json and no run history for {slug} — the caption "
+                  f"will say 'unknown'; pass --mp4 with a hand-made video if that "
+                  f"matters")
 
     class _P:            # poster only needs .bass off the plan
         bass = plan_json.get("bass")

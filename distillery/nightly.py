@@ -102,6 +102,16 @@ def record_finish(run_id, **fields):
     con.close()
 
 
+def album_for_slug(slug):
+    """(artist, album) for a slug, from the run history. Used when a pruned album
+    directory has no album.json to caption a later post from."""
+    con = _state()
+    row = con.execute("SELECT artist, album FROM runs WHERE slug=? "
+                      "ORDER BY id DESC LIMIT 1", (slug,)).fetchone()
+    con.close()
+    return (row[0], row[1]) if row else (None, None)
+
+
 def history(limit=20):
     con = _state()
     con.row_factory = sqlite3.Row
@@ -133,15 +143,34 @@ def prune(slug, keep_days=None, verbose=True):
     pass. Then ages out old renders and videos.
     """
     import shutil
+    from .download import AUDIO_EXTS
     keep_days = config.NIGHTLY_KEEP_DAYS if keep_days is None else keep_days
     freed = 0
-    for d in (config.STEMS_DIR / slug, config.ALBUMS_DIR / slug):
-        if d.exists():
-            n = _du(d)
-            shutil.rmtree(d, ignore_errors=True)
-            freed += n
-            if verbose:
-                print(f"  pruned {d.relative_to(config.DATA_DIR)} ({n / 1e6:.0f} MB)")
+    # stems go entirely — they are pure bulk
+    d = config.STEMS_DIR / slug
+    if d.exists():
+        n = _du(d)
+        shutil.rmtree(d, ignore_errors=True)
+        freed += n
+        if verbose:
+            print(f"  pruned {d.relative_to(config.DATA_DIR)} ({n / 1e6:.0f} MB)")
+    # the album copy loses its AUDIO but keeps album.json and the analysis: they are
+    # kilobytes, and album.json is what names the artist and album on a later post.
+    # Deleting the whole directory made `post` caption a render "unknown — unknown".
+    d = config.ALBUMS_DIR / slug
+    if d.exists():
+        n = 0
+        for f in d.iterdir():
+            if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
+                try:
+                    n += f.stat().st_size
+                    f.unlink()
+                except OSError:
+                    pass
+        freed += n
+        if verbose and n:
+            print(f"  pruned audio from {d.relative_to(config.DATA_DIR)} "
+                  f"({n / 1e6:.0f} MB, kept album.json + analysis)")
     if keep_days:
         cutoff = time.time() - keep_days * 86400
         for folder in (config.OUT_DIR, config.VIDEO_DIR):
